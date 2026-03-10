@@ -1,84 +1,47 @@
 import os
-import json
-import datetime
 import glob
 import telebot
 import yt_dlp
-from telebot import types
+from flask import Flask
+from threading import Thread
 
 TOKEN = os.getenv("TOKEN")
-ADMIN_ID = 7775541802
-LIMIT = 5
-DB_FILE = "users.json"
 
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
 
-def load_db():
-    if not os.path.exists(DB_FILE):
-        return {}
-    with open(DB_FILE,"r") as f:
-        return json.load(f)
+DOWNLOAD_FOLDER = "downloads"
 
-def save_db(db):
-    with open(DB_FILE,"w") as f:
-        json.dump(db,f)
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
 
-def check_limit(user_id):
-    db = load_db()
-    today = str(datetime.date.today())
-
-    user = db.get(str(user_id), {"date":today,"count":0,"lang":"ru"})
-
-    if user["date"] != today:
-        user["date"] = today
-        user["count"] = 0
-
-    if user["count"] >= LIMIT:
-        return False
-
-    user["count"] += 1
-    db[str(user_id)] = user
-    save_db(db)
-    return True
-
+# ---------- START ----------
 @bot.message_handler(commands=['start'])
 def start(message):
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("Русский 🇷🇺","Тоҷикӣ 🇹🇯")
-
     bot.send_message(
         message.chat.id,
-        "Выберите язык / Забонро интихоб кунед",
-        reply_markup=markup
+        "👋 Отправь ссылку из YouTube, Instagram или TikTok"
     )
 
-@bot.message_handler(commands=['admin'])
-def admin(message):
-
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    db = load_db()
-    bot.send_message(message.chat.id,f"Пользователей: {len(db)}")
-
+# ---------- DOWNLOAD ----------
 @bot.message_handler(func=lambda m: True)
-def download(message):
-
-    user_id = message.from_user.id
-
-    if not check_limit(user_id):
-        bot.send_message(message.chat.id,"Лимит 5 скачиваний в день.")
-        return
+def download_video(message):
 
     url = message.text.strip()
 
-    bot.send_message(message.chat.id,"⏳ Скачиваю...")
+    bot.send_message(message.chat.id, "⏳ Скачиваю видео...")
+
+    # удаляем старые файлы
+    files = glob.glob(f"{DOWNLOAD_FOLDER}/*")
+    for f in files:
+        os.remove(f)
 
     ydl_opts = {
-        "format": "best",
-        "outtmpl": "video.%(ext)s",
-        "noplaylist": True
+        "outtmpl": f"{DOWNLOAD_FOLDER}/video.%(ext)s",
+        "format": "bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
+        "noplaylist": True,
+        "quiet": True
     }
 
     try:
@@ -86,20 +49,28 @@ def download(message):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        files = glob.glob("video.*")
+        files = glob.glob(f"{DOWNLOAD_FOLDER}/*")
 
-        if len(files) == 0:
-            bot.send_message(message.chat.id,"Ошибка файла.")
+        if not files:
+            bot.send_message(message.chat.id, "❌ Видео не найдено")
             return
 
         video_file = files[0]
 
-        with open(video_file,"rb") as v:
-            bot.send_video(message.chat.id,v)
-
-        os.remove(video_file)
+        with open(video_file, "rb") as video:
+            bot.send_video(message.chat.id, video)
 
     except Exception as e:
-        bot.send_message(message.chat.id,"Ошибка загрузки.")
+        bot.send_message(message.chat.id, "❌ Ошибка загрузки")
+
+# ---------- KEEP ALIVE ----------
+@app.route("/")
+def home():
+    return "Bot is running"
+
+def run():
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
+Thread(target=run).start()
 
 bot.infinity_polling()
