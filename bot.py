@@ -1,0 +1,114 @@
+
+import os
+import json
+import datetime
+import telebot
+import yt_dlp
+from telebot import types
+
+TOKEN = os.getenv("TOKEN") or "PASTE_TOKEN"
+ADMIN_ID = 7775541802
+LIMIT = 5
+DB_FILE = "users.json"
+
+bot = telebot.TeleBot(TOKEN)
+
+def load_db():
+    if not os.path.exists(DB_FILE):
+        return {}
+    with open(DB_FILE,"r") as f:
+        return json.load(f)
+
+def save_db(db):
+    with open(DB_FILE,"w") as f:
+        json.dump(db,f)
+
+def check_limit(user_id):
+    db = load_db()
+    today = str(datetime.date.today())
+    user = db.get(str(user_id), {"date":today,"count":0,"lang":"ru"})
+
+    if user["date"] != today:
+        user["date"] = today
+        user["count"] = 0
+
+    if user["count"] >= LIMIT:
+        return False
+
+    user["count"] += 1
+    db[str(user_id)] = user
+    save_db(db)
+    return True
+
+def get_lang(user_id):
+    db = load_db()
+    user = db.get(str(user_id))
+    if not user:
+        return "ru"
+    return user.get("lang","ru")
+
+def set_lang(user_id, lang):
+    db = load_db()
+    user = db.get(str(user_id), {"count":0,"date":str(datetime.date.today())})
+    user["lang"] = lang
+    db[str(user_id)] = user
+    save_db(db)
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("Русский 🇷🇺","Тоҷикӣ 🇹🇯")
+    bot.send_message(message.chat.id,"Выберите язык / Забонро интихоб кунед",reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text in ["Русский 🇷🇺","Тоҷикӣ 🇹🇯"])
+def language(message):
+    if "Русский" in message.text:
+        set_lang(message.from_user.id,"ru")
+        bot.send_message(message.chat.id,"Отправь ссылку на видео.")
+    else:
+        set_lang(message.from_user.id,"tj")
+        bot.send_message(message.chat.id,"Ссылкаи видеоро фиристед.")
+
+@bot.message_handler(commands=['admin'])
+def admin(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    db = load_db()
+    bot.send_message(message.chat.id,f"Пользователей: {len(db)}")
+
+@bot.message_handler(func=lambda m: True)
+def download(message):
+    user_id = message.from_user.id
+    lang = get_lang(user_id)
+
+    if not check_limit(user_id):
+        if lang=="ru":
+            bot.send_message(message.chat.id,"Лимит 5 скачиваний в день.")
+        else:
+            bot.send_message(message.chat.id,"Лимит 5 боргирӣ дар як рӯз.")
+        return
+
+    url = message.text.strip()
+
+    bot.send_message(message.chat.id,"⏳ Скачиваю...")
+
+    ydl_opts = {
+        "format": "mp4",
+        "outtmpl": "video.%(ext)s",
+        "noplaylist": True
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        if os.path.exists("video.mp4"):
+            with open("video.mp4","rb") as v:
+                bot.send_video(message.chat.id,v)
+            os.remove("video.mp4")
+        else:
+            bot.send_message(message.chat.id,"Ошибка файла.")
+    except Exception:
+        bot.send_message(message.chat.id,"Ошибка загрузки.")
+
+bot.infinity_polling()
